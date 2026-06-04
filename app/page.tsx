@@ -17,11 +17,22 @@ export default function Home() {
   const [newSport, setNewSport] = useState('サッカー')
   const [newDate, setNewDate] = useState('')
   const [newLocation, setNewLocation] = useState('')
-  const [newSpots] = useState(8)
-  const [newLevel] = useState('初心者歓迎')
   const [toast, setToast] = useState('')
+  const [user, setUser] = useState<any>(null)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [authMode, setAuthMode] = useState<'login'|'signup'>('login')
+  const [authError, setAuthError] = useState('')
 
-  useEffect(() => { fetchEvents() }, [])
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null)
+    })
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+    fetchEvents()
+  }, [])
 
   async function fetchEvents() {
     const { data } = await supabase.from('events').select('*').order('created_at', { ascending: false })
@@ -33,7 +44,25 @@ export default function Home() {
     setTimeout(() => setToast(''), 2500)
   }
 
+  async function handleAuth() {
+    setAuthError('')
+    if (authMode === 'signup') {
+      const { error } = await supabase.auth.signUp({ email, password })
+      if (error) { setAuthError(error.message); return }
+      showToast('確認メールを送りました！')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) { setAuthError('メールかパスワードが間違っています'); return }
+    }
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    showToast('ログアウトしました')
+  }
+
   async function toggleJoin(id: string) {
+    if (!user) { showToast('ログインが必要です'); return }
     const ev = events.find(e => e.id === id)
     if (!ev) return
     if (joined.has(id)) {
@@ -50,11 +79,12 @@ export default function Home() {
   }
 
   async function createEvent() {
+    if (!user) { showToast('ログインが必要です'); return }
     if (!newTitle || !newDate || !newLocation) { showToast('タイトル・日時・場所は必須です'); return }
     await supabase.from('events').insert({
       title: newTitle, sport: newSport, date: newDate,
-      location: newLocation, spots: newSpots, level: newLevel,
-      organizer: '田中 悠人', joined: 0
+      location: newLocation, spots: 8, level: '初心者歓迎',
+      organizer: user.email?.split('@')[0] ?? '匿名', joined: 0
     })
     setShowModal(false)
     setNewTitle(''); setNewDate(''); setNewLocation('')
@@ -65,10 +95,41 @@ export default function Home() {
   const filtered = filter === '全て' ? events : events.filter(e => e.sport === filter)
   const sports = ['全て','サッカー','バスケ','テニス','バドミントン','バレー']
 
+  if (!user) return (
+    <main style={{maxWidth:480,margin:'0 auto',fontFamily:'sans-serif',minHeight:'100vh',background:'#f5f5f5',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{background:'white',borderRadius:16,padding:32,width:'100%',boxShadow:'0 2px 20px rgba(0,0,0,0.08)'}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontSize:28,fontWeight:800,color:'#1A1A2E'}}>Sport<span style={{color:'#FF5A1F'}}>U</span></div>
+          <div style={{fontSize:14,color:'#888',marginTop:4}}>大学生のためのスポーツ募集アプリ</div>
+        </div>
+        <div style={{display:'flex',marginBottom:20,background:'#f5f5f5',borderRadius:8,padding:4}}>
+          {(['login','signup'] as const).map(mode => (
+            <button key={mode} onClick={() => setAuthMode(mode)} style={{flex:1,padding:'8px',border:'none',borderRadius:6,background:authMode===mode?'white':'transparent',fontWeight:authMode===mode?600:400,cursor:'pointer',fontSize:14}}>
+              {mode==='login'?'ログイン':'新規登録'}
+            </button>
+          ))}
+        </div>
+        <div style={{marginBottom:12}}>
+          <label style={{fontSize:13,color:'#888',display:'block',marginBottom:4}}>メールアドレス</label>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="university@example.com" style={{width:'100%',padding:'10px 12px',border:'1px solid #eee',borderRadius:8,fontSize:14,boxSizing:'border-box'}} />
+        </div>
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:13,color:'#888',display:'block',marginBottom:4}}>パスワード</label>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="6文字以上" style={{width:'100%',padding:'10px 12px',border:'1px solid #eee',borderRadius:8,fontSize:14,boxSizing:'border-box'}} />
+        </div>
+        {authError && <div style={{color:'#FF5A1F',fontSize:13,marginBottom:12}}>{authError}</div>}
+        <button onClick={handleAuth} style={{width:'100%',background:'#1A1A2E',color:'white',border:'none',borderRadius:10,padding:14,fontSize:15,cursor:'pointer'}}>
+          {authMode==='login'?'ログイン':'アカウント作成'}
+        </button>
+      </div>
+    </main>
+  )
+
   return (
     <main style={{maxWidth:480,margin:'0 auto',fontFamily:'sans-serif',background:'#f5f5f5',minHeight:'100vh',paddingBottom:80}}>
       <div style={{background:'#1A1A2E',color:'white',padding:'14px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,zIndex:100}}>
         <div style={{fontSize:20,fontWeight:800}}>Sport<span style={{color:'#FF5A1F'}}>U</span></div>
+        <button onClick={handleLogout} style={{background:'rgba(255,255,255,0.1)',border:'none',color:'white',borderRadius:8,padding:'6px 12px',fontSize:12,cursor:'pointer'}}>ログアウト</button>
       </div>
       <div style={{display:'flex',background:'white',borderBottom:'1px solid #eee',padding:'0 8px'}}>
         {['home','chat','profile'].map(v => (
@@ -126,12 +187,14 @@ export default function Home() {
       {view==='profile' && (
         <div style={{padding:16}}>
           <div style={{background:'#1A1A2E',borderRadius:12,padding:24,color:'white',textAlign:'center',marginBottom:16}}>
-            <div style={{width:64,height:64,borderRadius:'50%',background:'#FF5A1F',margin:'0 auto 12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,fontWeight:700}}>田</div>
-            <div style={{fontSize:20,fontWeight:700}}>田中 悠人</div>
-            <div style={{fontSize:13,opacity:0.6}}>東京大学 3年生</div>
+            <div style={{width:64,height:64,borderRadius:'50%',background:'#FF5A1F',margin:'0 auto 12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,fontWeight:700}}>
+              {user.email?.[0].toUpperCase()}
+            </div>
+            <div style={{fontSize:18,fontWeight:700}}>{user.email?.split('@')[0]}</div>
+            <div style={{fontSize:13,opacity:0.6}}>{user.email}</div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:16}}>
-            {([['参加中',joined.size],['参加済み',12],['主催',5]] as [string,number][]).map(([label,num]) => (
+            {([['参加中',joined.size],['参加済み',0],['主催',0]] as [string,number][]).map(([label,num]) => (
               <div key={label} style={{background:'white',borderRadius:10,padding:14,textAlign:'center',border:'1px solid #eee'}}>
                 <div style={{fontSize:24,fontWeight:700,color:'#FF5A1F'}}>{num}</div>
                 <div style={{fontSize:12,color:'#888'}}>{label}</div>
