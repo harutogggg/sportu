@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -23,6 +23,10 @@ export default function Home() {
   const [password, setPassword] = useState('')
   const [authMode, setAuthMode] = useState<'login'|'signup'>('login')
   const [authError, setAuthError] = useState('')
+  const [activeChat, setActiveChat] = useState<any>(null)
+  const [messages, setMessages] = useState<any[]>([])
+  const [newMsg, setNewMsg] = useState('')
+  const msgEndRef = useRef<any>(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -34,9 +38,39 @@ export default function Home() {
     fetchEvents()
   }, [])
 
+  useEffect(() => {
+    msgEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
   async function fetchEvents() {
     const { data } = await supabase.from('events').select('*').order('created_at', { ascending: false })
     if (data) setEvents(data)
+  }
+
+  async function fetchMessages(eventId: string) {
+    const { data } = await supabase.from('messages').select('*').eq('event_id', eventId).order('created_at', { ascending: true })
+    if (data) setMessages(data)
+  }
+
+  async function openChat(ev: any) {
+    setActiveChat(ev)
+    setView('chatroom')
+    await fetchMessages(ev.id)
+    const channel = supabase.channel('messages:'+ev.id)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `event_id=eq.${ev.id}` }, payload => {
+        setMessages(prev => [...prev, payload.new])
+      })
+      .subscribe()
+  }
+
+  async function sendMessage() {
+    if (!newMsg.trim() || !activeChat || !user) return
+    await supabase.from('messages').insert({
+      event_id: activeChat.id,
+      sender: user.email?.split('@')[0] ?? '匿名',
+      content: newMsg.trim()
+    })
+    setNewMsg('')
   }
 
   function showToast(msg: string) {
@@ -49,7 +83,7 @@ export default function Home() {
     if (authMode === 'signup') {
       const { error } = await supabase.auth.signUp({ email, password })
       if (error) { setAuthError(error.message); return }
-      showToast('確認メールを送りました！')
+      showToast('アカウントを作成しました！')
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) { setAuthError('メールかパスワードが間違っています'); return }
@@ -125,6 +159,37 @@ export default function Home() {
     </main>
   )
 
+  if (view === 'chatroom' && activeChat) return (
+    <main style={{maxWidth:480,margin:'0 auto',fontFamily:'sans-serif',background:'#f5f5f5',minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      <div style={{background:'#1A1A2E',color:'white',padding:'14px 20px',display:'flex',alignItems:'center',gap:12,position:'sticky',top:0,zIndex:100}}>
+        <button onClick={() => setView('chat')} style={{background:'none',border:'none',color:'white',fontSize:20,cursor:'pointer'}}>←</button>
+        <div>
+          <div style={{fontWeight:700,fontSize:15}}>{activeChat.title}</div>
+          <div style={{fontSize:12,opacity:0.6}}>{activeChat.sport} · {activeChat.date}</div>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:16,display:'flex',flexDirection:'column',gap:10,paddingBottom:80}}>
+        {messages.length === 0 && <div style={{textAlign:'center',color:'#aaa',padding:40}}>まだメッセージがありません。最初のメッセージを送ってみよう！</div>}
+        {messages.map(msg => {
+          const isMe = msg.sender === user.email?.split('@')[0]
+          return (
+            <div key={msg.id} style={{display:'flex',flexDirection:'column',alignItems:isMe?'flex-end':'flex-start'}}>
+              {!isMe && <div style={{fontSize:11,color:'#aaa',marginBottom:2}}>{msg.sender}</div>}
+              <div style={{background:isMe?'#1A1A2E':'white',color:isMe?'white':'#333',borderRadius:isMe?'14px 14px 4px 14px':'14px 14px 14px 4px',padding:'9px 13px',maxWidth:'75%',fontSize:14,border:isMe?'none':'1px solid #eee'}}>
+                {msg.content}
+              </div>
+            </div>
+          )
+        })}
+        <div ref={msgEndRef} />
+      </div>
+      <div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:480,background:'white',borderTop:'1px solid #eee',padding:12,display:'flex',gap:8,boxSizing:'border-box'}}>
+        <input value={newMsg} onChange={e=>setNewMsg(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendMessage()} placeholder="メッセージを入力..." style={{flex:1,padding:'10px 12px',border:'1px solid #eee',borderRadius:8,fontSize:14}} />
+        <button onClick={sendMessage} style={{background:'#FF5A1F',color:'white',border:'none',borderRadius:8,padding:'10px 16px',fontSize:14,cursor:'pointer'}}>送信</button>
+      </div>
+    </main>
+  )
+
   return (
     <main style={{maxWidth:480,margin:'0 auto',fontFamily:'sans-serif',background:'#f5f5f5',minHeight:'100vh',paddingBottom:80}}>
       <div style={{background:'#1A1A2E',color:'white',padding:'14px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,zIndex:100}}>
@@ -169,16 +234,17 @@ export default function Home() {
       {view==='chat' && (
         <div style={{padding:16}}>
           <div style={{fontWeight:700,fontSize:18,marginBottom:12}}>チャット</div>
-          {joined.size===0 ? (
-            <div style={{textAlign:'center',padding:40,color:'#aaa'}}>募集に参加するとチャットが始まります</div>
+          {events.length === 0 ? (
+            <div style={{textAlign:'center',padding:40,color:'#aaa'}}>募集がありません</div>
           ) : (
-            events.filter(e => joined.has(e.id)).map(ev => (
-              <div key={ev.id} style={{background:'white',borderRadius:12,padding:16,marginBottom:10,border:'1px solid #eee',display:'flex',alignItems:'center',gap:12}}>
-                <div style={{width:44,height:44,borderRadius:'50%',background:'#FFF0EB',display:'flex',alignItems:'center',justifyContent:'center',color:'#FF5A1F',fontWeight:700}}>{ev.organizer[0]}</div>
-                <div>
+            events.map(ev => (
+              <div key={ev.id} onClick={() => openChat(ev)} style={{background:'white',borderRadius:12,padding:16,marginBottom:10,border:'1px solid #eee',display:'flex',alignItems:'center',gap:12,cursor:'pointer'}}>
+                <div style={{width:44,height:44,borderRadius:'50%',background:'#FFF0EB',display:'flex',alignItems:'center',justifyContent:'center',color:'#FF5A1F',fontWeight:700,fontSize:18}}>{ev.sport[0]}</div>
+                <div style={{flex:1}}>
                   <div style={{fontWeight:500,fontSize:14}}>{ev.title}</div>
-                  <div style={{fontSize:12,color:'#aaa'}}>タップしてチャットを開く</div>
+                  <div style={{fontSize:12,color:'#aaa'}}>{ev.sport} · タップして開く</div>
                 </div>
+                <div style={{fontSize:18,color:'#ccc'}}>›</div>
               </div>
             ))
           )}
